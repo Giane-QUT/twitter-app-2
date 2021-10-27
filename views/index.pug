@@ -1,5 +1,14 @@
 extends layout
 
 block content
-  h1= title
+  h1= "Tweet Analyser"
   p Welcome to #{title}
+  form(action="/", method="get")
+    div(class="input")
+      label(for='tweet filters') Enter keywords for tweets to find
+      input(
+        type='text'
+        id='tweetFilters'
+        name='tweetFilters'
+      )
+    button(type='submit') Search
