@@ -12,5 +12,23 @@ block content
         name='tweetFilters'
       )
     button(type='submit') Search
+  if tweets_data 
+    table 
+      tr 
+        td 
+          strong Username
+        td 
+          strong Tweet
+        td 
+          strong Date
+        td 
+          strong Sentiment Value
+      each tweet in tweets_data 
+        tr.theTweet 
+          td #{tweet.user}
+          td #{tweet.text} 
+          td #{tweet.date}
+          td #{tweet.sentimentVal}
+
 
     
