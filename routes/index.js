@@ -20,22 +20,22 @@ client.on('error', (err) => {
 const getRedis = promisify(client.get).bind(client);
 const saveRedis = promisify(client.setex).bind(client);
 function saveToRedis(query,data) {
-  return saveRedis(`tweetFilter:${query}`, 300, JSON.stringify({source:'Redis Cache',...data}))
+  return saveRedis(`tweetFilter:${query}`, 300, JSON.stringify({...data}))
 }
 
-// AWS S3 Setup
+//AWS S3 Setup
 AWS.config.getCredentials((err) => {
   if (err) {
     console.log(err.stack);
   }
   else {
-
+    console.log("Credentials")
   }
 })
 const bucketName = 'n10532935-twitterbucket';
 const s3 = new AWS.S3({apiVersion:'2006-03-01'});
 function saveToS3(query,data) {
-  return s3.putObject({Bucket:bucketName, Key:query, Body:data}).promise();
+  return s3.putObject({Bucket:bucketName, Key:`tweetFilter-${query}`, Body:data}).promise();
 }
 
 // Use of Natural for sentiment analysis was found
@@ -47,40 +47,50 @@ const analyzer = new Analyzer("English", stemmer, "afinn")
 
 /* GET home page. */
 router.get('/', function(req, res) {
-  // NOTE by Giane: Minimal error handling is currently used
   if (req.query.tweetFilters) {
     try {
-      const query = req.query.tweetFilters;
+      const query = (req.query.tweetFilters).trim();
       // Start storage checks before calling twitter api
       getRedis(`tweetFilter:${query}`)
       .then((result) => {
         let foundS3 = false;
         if (result) {
-          console.log("Found key" );
+          console.log("MATCHED IN REDIS" );
           const resultJSON = JSON.parse(result);
-          return resultJSON;
+          const sourceResult = {source: "REDIS",data: resultJSON};
+          //console.log(Object.keys(sourceResult));
+          return sourceResult;
         }
         else {
           // Check bucket if no redis matches
           const params = {Bucket: bucketName, Key:`tweetFilter-${query}`}
+          console.log("S3 BEING CHECKED");
           return(
             s3.getObject(params).promise()
             .then((result) =>{
               if (result) {
                 const resultJSON = JSON.parse(result.Body);
-                return resultJSON;
+                let sourceResult = {source: "S3",data:resultJSON};
+                //console.log("results" + sourceResult)
+                console.log("RESU;TS" + Object.keys(sourceResult));
+                return sourceResult;
               }
             })
             .catch((err) => {
               console.error(err);
               if (err.statusCode === 404) {
+                console.log("TWITTER API BEING CALLED");
                 return (
-                  axios.get(`https://api.twitter.com/1.1/search/tweets.json?q=${query}&lang=en`,{headers: {Authorization: 'Bearer ' + twtBearer}})
+                  axios.get(`https://api.twitter.com/1.1/search/tweets.json?q=${query}&lang=en&count=5&result_type=recent`,{headers: {Authorization: 'Bearer ' + twtBearer}})
                   .then((response) => {
                     if (response.status == 200) {
-                      return response.data;
+                      const sourceResult = {source: "TWITTER",...response.data};
+                      return sourceResult;
                     }
                     else throw Error("Status code " + response.status + " was received.")
+                  })
+                  .catch((err) => {
+                    console.error(err);
                   })
                 )
               }
@@ -89,23 +99,55 @@ router.get('/', function(req, res) {
         } // end check s3 and api
       })
       .then((data) => {
-        // Iterate and get the tweets' text
-        //console.log(data)
-        let tweets = data.statuses;
-        console.log("Query received>>" + req.query.tweetFilters + "<<");
-        res.render('index', { title: 'Tweet Analyser', tweets_data: parseTweets(tweets)});
-        return data
+        //console.log(Object.keys(data));
+        //console.log(data);
+        let tweets = null;
+        let source = data.source;
+        if (source === "REDIS") {
+          //console.log("redus data" + Object.keys(data.data))
+          tweets = []
+          for(let [key,value] of Object.entries(data.data)) {
+            //console.log(value);
+            if (key !== "source") {
+              tweets.push(value);
+            }
+          }
+        } else if (source === "TWITTER") {
+          //console.log("TW KEYS ARE" + Object.keys(data))
+          tweets = data.statuses
+          //console.log(tweets)
+        } else {
+          console.log("AMAZON USED")
+          //console.log(Object.keys(data))
+          //tweets = data;
+          tweets = []
+
+          for(let [key,value] of Object.entries(data.data)) {
+            //console.log("KEY"+ key + "TWEET" + value);
+            if (key !== "source") {
+              tweets.push(value);
+            }
+          }
+        }
+        res.render('index', { title: 'Tweet Analyser', tweets_data: parseTweets(source,tweets), query: query});
+        return tweets
       })
       .then((data) => {
-        const body = JSON.stringify({source:'S3 Bucket',...data})
-        Promise.all([saveToRedis(query,data),saveToS3(query,body)])
-        .then((results) => {
-          console.log("Saved to REDIS? " + results[0]);
-          console.log("Saved to S3? " + results[1]);
+        const params = {Bucket: bucketName, Key:`tweetFilter-${query}`}
+        const body = JSON.stringify(data); //for s3
+        saveToRedis(query,data)
+        .then(() => {
+          console.log("Saved to redis");
         })
         .catch((err) => {
-          console.log("Saving err");
-          console.error(err);
+          console.log("REDIS saving err")
+        })
+        saveToS3(query,body)
+        .then(() => {
+          console.log("Saved to s3");
+        })
+        .catch((err) => {
+          console.log("S3 Saving err");
         })
       })
       .catch((err) => {
@@ -122,26 +164,71 @@ router.get('/', function(req, res) {
   }
 });
 
-function parseTweets(tweet_data) {
-  let tweets = []
-  for (let theTweet of tweet_data) {
-    // Populate tweet obj to be added to tweet array
-    tweet = {
-      user: "",
-      text: "",
-      date: "",
-      sentimentVal: 0,
+function parseTweets(source,tweet_data) {
+  let tweets = [];
+  if (source === "REDIS" || source === "S3") {
+    for(let [key,value] of Object.entries(tweet_data)) {
+      if (key !== "source") {
+        //console.log(value);
+        const theTweet = value;
+        // Populate tweet obj to be added to tweet array
+        tweet = {
+          user: "",
+          text: "",
+          date: "",
+          sentimentValCol: "",
+          sentimentValPic: ""
+        }
+        tweet.user = theTweet.user.screen_name;
+        tweet.text =  theTweet.text;
+        tweet.date = theTweet.created_at;
+        const sentimentVal = Math.round(analyzer.getSentiment(tokenizer.tokenize(theTweet.text)));
+        if (sentimentVal === -1) {
+          tweet.sentimentValCol = "#ff3300";
+          tweet.sentimentValPic = 'negative_face';
+        } else if (sentimentVal === 0){
+          tweet.sentimentValCol = "#ffffff";
+          tweet.sentimentValPic = 'neutral_face';
+        } else {
+          tweet.sentimentValCol = "#00ff99";
+          tweet.sentimentValPic = 'positive_face';
+        }
+        tweets.push(tweet);
+        }
     }
-    tweet.user = theTweet.user.screen_name;
-    tweet.text =  theTweet.text;
-    tweet.date = theTweet.created_at;
-    tweet.sentimentVal = analyzer.getSentiment(tokenizer.tokenize(theTweet.text))
-    tweets.push(tweet);
-    //console.log(tweet);
-    // console.log("Username is<<: " + tweet.user.screen_name);
-    // console.log("Tweet is>>>> " + tweet.text + "\n");
-    // console.log("Sentiment is====");
-    //console.log(analyzer.getSentiment(tokenizer.tokenize(tweet.text)));
+      
+  } else {
+    for (let theTweet of tweet_data) {
+      // Populate tweet obj to be added to tweet array
+      tweet = {
+        user: "",
+        text: "",
+        date: "",
+        sentimentValCol: "",
+        sentimentValPic: ""
+      }
+      tweet.user = theTweet.user.screen_name;
+      tweet.text =  theTweet.text;
+      tweet.date = theTweet.created_at;
+      const sentimentVal = Math.round(analyzer.getSentiment(tokenizer.tokenize(theTweet.text)));
+      if (sentimentVal === -1) {
+        tweet.sentimentValCol = "#ff3300";
+        tweet.sentimentValPic = 'negative_face';
+      } else if (sentimentVal === 0){
+        tweet.sentimentValCol = "#ffffff";
+        tweet.sentimentValPic = 'neutral_face';
+      } else {
+        tweet.sentimentValCol = "#00ff99";
+        tweet.sentimentValPic = 'positive_face';
+      }
+      tweets.push(tweet);
+      console.log(tweet);
+      console.log("Username is<<: " + tweet.user.screen_name);
+      console.log("Tweet is>>>> " + tweet.text + "\n");
+      console.log("Sentiment is====");
+      console.log(analyzer.getSentiment(tokenizer.tokenize(tweet.text)));
+  }
+
   
   }
   return tweets;

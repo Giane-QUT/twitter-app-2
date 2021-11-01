@@ -13,6 +13,10 @@ block content
       )
     button(type='submit') Search
   if tweets_data 
+    h3 
+      strong Sentiment analysis results 
+    h4 
+      strong Query: #{query}
     table 
       tr 
         td 
@@ -24,11 +28,13 @@ block content
         td 
           strong Sentiment Value
       each tweet in tweets_data 
-        tr.theTweet 
+        tr.theTweet(style=`background-color:${tweet.sentimentValCol}`)
           td #{tweet.user}
           td #{tweet.text} 
           td #{tweet.date}
-          td #{tweet.sentimentVal}
+          td 
+            img(src=`/images/${tweet.sentimentValPic}.png` style='height:50px;')
+            
 
 
     
