@@ -81,7 +81,7 @@ router.get('/', function(req, res) {
               if (err.statusCode === 404) {
                 console.log("TWITTER API BEING CALLED");
                 return (
-                  axios.get(`https://api.twitter.com/1.1/search/tweets.json?q=${query}&lang=en&count=5&result_type=recent`,{headers: {Authorization: 'Bearer ' + twtBearer}})
+                  axios.get(`https://api.twitter.com/1.1/search/tweets.json?q=${query}&lang=en&count=100&result_type=recent`,{headers: {Authorization: 'Bearer ' + twtBearer}})
                   .then((response) => {
                     if (response.status == 200) {
                       const sourceResult = {source: "TWITTER",...response.data};
